@@ -20,6 +20,10 @@ public record Ballot(int number, String replicaId) {
         return COMPARATOR.compare(this, requireNonNull(ballot)) == 0;
     }
 
+    public boolean notEquals(Ballot ballot) {
+        return COMPARATOR.compare(this, requireNonNull(ballot)) != 0;
+    }
+
     public boolean greaterThan(Ballot ballot) {
         return COMPARATOR.compare(this, requireNonNull(ballot)) > 0;
     }

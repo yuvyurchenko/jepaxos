@@ -87,36 +87,68 @@ public class Message {
         getBody().put("text", text);
     }
 
-    public String getKey() {
-        return getBody().get("key").asText();
+    public Object getKey() {
+        var val = getBody().get("key");
+        if (val.isNull()) {
+            return null;
+        }
+        return val.asInt();
     }
 
-    public void setKey(String key) {
-        getBody().put("key", key);
+    public void setKey(Object key) {
+        if (key == null) {
+            getBody().putNull("key");
+        } else {
+            getBody().put("key", (int) key);
+        }
     }
 
-    public String getValue() {
-        return getBody().get("value").asText();
+    public Object getValue() {
+        var val = getBody().get("value");
+        if (val.isNull()) {
+            return null;
+        }
+        return val.asInt();
     }
 
-    public void setValue(String value) {
-        getBody().put("value", value);
+    public void setValue(Object value) {
+        if (value == null) {
+            getBody().putNull("value");
+        } else {
+            getBody().put("value", (int) value);
+        }
     }
 
-    public String getFrom() {
-        return getBody().get("from").asText();
+    public Object getFrom() {
+        var val = getBody().get("from");
+        if (val.isNull()) {
+            return null;
+        }
+        return val.asInt();
     }
 
-    public void setFrom(String from) {
-        getBody().put("from", from);
+    public void setFrom(Object from) {
+        if (from == null) {
+            getBody().putNull("from");
+        } else {
+            getBody().put("from", (int) from);
+        }
     }
 
-    public String getTo() {
-        return getBody().get("to").asText();
+    public Object getTo() {
+        var val = getBody().get("to");
+        if (val.isNull()) {
+            return null;
+        }
+        return val.asInt();
     }
 
-    public void setTo(String to) {
-        getBody().put("to", to);
+    public void setTo(Object to) {
+        if (to == null) {
+            getBody().putNull("to");
+        } else {
+            getBody().put("to", (int) to);
+        }
     }
 
     public String getNodeId() {

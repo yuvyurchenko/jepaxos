@@ -2,7 +2,11 @@ package edu.yuvyurchenko.jepaxos.epaxos.handlers;
 
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace;
+import edu.yuvyurchenko.jepaxos.epaxos.Replica;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.*;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Attributes;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Ballot;
@@ -12,11 +16,14 @@ import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
 public class PrepareHandler extends AbstractHandler<Prepare> {
     
+    private static final Logger LOGGER = LoggerFactory.getLogger(PrepareHandler.class);
+
     public PrepareHandler(Cluster cluster, Network network, InstanceSpace instanceSpace) {
         super(cluster, network, instanceSpace);
     }
 
     public void handle(Prepare prepare) {
+        LOGGER.debug("Receive - prepare={}", prepare);
         var instance = instanceSpace.getInstance(prepare.replicaId(), prepare.instanceId());
         
         PrepareReply prepareReply;
@@ -58,6 +65,7 @@ public class PrepareHandler extends AbstractHandler<Prepare> {
                                             instance.getAttributes());
         }
         network.send(prepareReply);
+        LOGGER.debug("Exit - send reply={}", prepareReply);
     }
 
 }

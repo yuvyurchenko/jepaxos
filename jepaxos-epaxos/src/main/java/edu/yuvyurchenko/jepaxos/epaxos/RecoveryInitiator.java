@@ -3,6 +3,9 @@ package edu.yuvyurchenko.jepaxos.epaxos;
 import java.util.Map;
 import java.util.function.Function;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.Prepare;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.MessageMetadata;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.NetworkMessage;
@@ -14,6 +17,8 @@ import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
 public class RecoveryInitiator {
     
+    private static final Logger LOGGER = LoggerFactory.getLogger(RecoveryInitiator.class);
+
     private final Cluster cluster;
     private final Network network;
     private final InstanceSpace instanceSpace;
@@ -25,6 +30,8 @@ public class RecoveryInitiator {
     }
 
     public void startRecoveryForInstance(String replicaId, int instanceId) {
+        LOGGER.debug("Start recovery - replicaId={}, instanceId={}", replicaId, instanceId);
+
         var instance = instanceSpace.getInstance(replicaId, instanceId);
 
         if (instance == null) {
@@ -75,6 +82,7 @@ public class RecoveryInitiator {
         cluster.getAllReplicaIds().stream()
             .filter(id -> !id.equals(cluster.getCurrReplicaId()))
             .map(msgFactory)
+            .peek(m -> LOGGER.debug("Broadcast Prepare={}", m))
             .forEach(network::send);
     }
 

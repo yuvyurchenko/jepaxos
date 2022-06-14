@@ -1,5 +1,8 @@
 package edu.yuvyurchenko.jepaxos.epaxos.handlers;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import edu.yuvyurchenko.jepaxos.epaxos.CommandOperationRegistry;
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.*;
@@ -9,6 +12,8 @@ import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
 public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcceptReply> {
     
+    private static final Logger LOGGER = LoggerFactory.getLogger(TryPreAcceptReplyHandler.class);
+
     public TryPreAcceptReplyHandler(Cluster cluster, 
                                     Network network, 
                                     InstanceSpace instanceSpace,
@@ -17,16 +22,18 @@ public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcce
     }
 
     public void handle(TryPreAcceptReply tryPreAcceptReply) {
+        LOGGER.debug("Receive tryPreAcceptReply={}", tryPreAcceptReply);
         var instance = instanceSpace.getInstance(tryPreAcceptReply.replicaId(), tryPreAcceptReply.instanceId());
 
         if (instance == null || instance.leaderBookkeeping() == null 
                              || !instance.leaderBookkeeping().isTryingToPreAccept() 
-                             || instance.leaderBookkeeping().recovertInstance() == null) {
+                             || instance.leaderBookkeeping().recoveryInstance() == null) {
+            LOGGER.debug("Exit - no recovery process");
             return;
         }
 
         var lb = instance.leaderBookkeeping();
-        var ri = lb.recovertInstance();
+        var ri = lb.recoveryInstance();
 
         if (tryPreAcceptReply.ok()) {
             lb.incPreAcceptOKs();
@@ -46,17 +53,20 @@ public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcce
                                                      instance.getBallot(), 
                                                      instance.getCommand(), 
                                                      instance.getAttributes()));
+                LOGGER.debug("Exit - broadcast accept");
                 return;
             }
         } else {
             lb.incNacks();
             if (tryPreAcceptReply.ballot().greaterThan(instance.getBallot())) {
+                LOGGER.debug("Exit - another ballot wins");
                 return;
             }
             lb.incTryPreAcceptOKs();
             if (tryPreAcceptReply.replicaId().equals(tryPreAcceptReply.conflictReplicaId()) 
                 && tryPreAcceptReply.instanceId() == tryPreAcceptReply.conflictInstanceId()) {
                 lb.setTryingToPreAccept(false);
+                LOGGER.debug("Exit - stop trying to preAccept");
                 return;
             }
             lb.updatePossibleQuorum(tryPreAcceptReply.acceptorId(), false);
@@ -71,7 +81,7 @@ public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcce
                               tryPreAcceptReply.instanceId(), 
                               instance.getBallot(), 
                               ri.getCommand(), 
-                              lb.getReplyData());
+                              instance.replyData());
             }
             if (notInQuorum == cluster.getAllReplicaIds().size() / 2) {
                 //this is to prevent defer cycles
@@ -84,7 +94,7 @@ public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcce
                                   tryPreAcceptReply.instanceId(), 
                                   instance.getBallot(), 
                                   ri.getCommand(), 
-                                  lb.getReplyData());    
+                                  instance.replyData());    
                 }
             }
             if (hasQuorum(lb.getTryPreAcceptOKs())) {
@@ -96,6 +106,6 @@ public class TryPreAcceptReplyHandler extends AbstractRecoveryHandler<TryPreAcce
                 lb.setTryingToPreAccept(false);
             }
         }
+        LOGGER.debug("Exit - handled");
     }
-
 }

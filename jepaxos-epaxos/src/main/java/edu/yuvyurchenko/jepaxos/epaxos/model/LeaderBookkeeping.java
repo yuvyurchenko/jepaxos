@@ -1,14 +1,18 @@
 package edu.yuvyurchenko.jepaxos.epaxos.model;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
-import edu.yuvyurchenko.jepaxos.epaxos.messages.ReplyData;
-
+/**
+ * Thread Locality (some fields require sync):
+ *  - created and published: protocol executing thread
+ *  - read and modified: protocol executing thread
+ */
 public class LeaderBookkeeping {
-    private final ReplyData replyData;
     private Ballot maxRecvBallot;
     private int prepareOKs;
     private boolean allEqual;
@@ -17,31 +21,27 @@ public class LeaderBookkeeping {
     private int tryPreAcceptOKs;
     private int nacks;
     private boolean preparing;
-    private Map<String, Integer> originalDeps;
-    private Map<String, Integer> committedDeps;
-    private RecoveryInstance recoveryInstance;
+    private final Map<String, Integer> originalDeps;
+    private final Map<String, Integer> committedDeps;
     private Map<String, Boolean> possibleQuorum;
+    private RecoveryInstance recoveryInstance;
     private boolean tryingToPreAccept;
 
-    LeaderBookkeeping(ReplyData replyData, 
-                      Map<String, Integer> originalDeps) {
-        this.replyData = replyData;
+    LeaderBookkeeping(Map<String, Integer> originalDeps) {
         this.allEqual = true;
-        this.originalDeps = originalDeps;
+        this.originalDeps = new HashMap<>(originalDeps);
+        this.committedDeps = new HashMap<>();
+        this.possibleQuorum = new HashMap<>();
         this.preparing = false;
     }
 
-    LeaderBookkeeping(ReplyData replyData, 
-                      Map<String, Integer> originalDeps,
+    LeaderBookkeeping(Map<String, Integer> originalDeps,
                       boolean preparing) {
-        this.replyData = replyData;
         this.allEqual = true;
-        this.originalDeps = originalDeps;
+        this.originalDeps = new HashMap<>(originalDeps);
+        this.committedDeps = new HashMap<>();
+        this.possibleQuorum = new HashMap<>();
         this.preparing = preparing;
-    }
-
-    public ReplyData getReplyData() {
-        return replyData;
     }
 
     public void incPrepareOKs() {
@@ -137,14 +137,14 @@ public class LeaderBookkeeping {
     }
 
     public void initRecoveryInstance(Command command,
-                                        InstanceStatus status,
-                                        Attributes attributes,
-                                        int preAcceptCount,
-                                        boolean leaderResponded) {
+                                     InstanceStatus status,
+                                     Attributes attributes,
+                                     int preAcceptCount,
+                                     boolean leaderResponded) {
         this.recoveryInstance = new RecoveryInstance(command, status, attributes, preAcceptCount, leaderResponded);
     }
 
-    public RecoveryInstance recovertInstance() {
+    public RecoveryInstance recoveryInstance() {
         return recoveryInstance;
     }
 
@@ -157,7 +157,7 @@ public class LeaderBookkeeping {
     }
 
     public long countPossibleQuorum(boolean val) {
-        return possibleQuorum.values().stream().filter(v -> v == val).count();
+        return possibleQuorum.values().stream().filter(v -> Objects.equals(v, val)).count();
     }
 
     public boolean isPossibleQuorum(String replicaId) {

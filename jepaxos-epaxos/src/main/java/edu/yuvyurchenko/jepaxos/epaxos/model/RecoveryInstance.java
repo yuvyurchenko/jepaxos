@@ -1,5 +1,10 @@
 package edu.yuvyurchenko.jepaxos.epaxos.model;
 
+/**
+ * Thread Locality (does not require sync):
+ *  - created and published: command executing thread
+ *  - read and modified: protocol executing thread
+ */
 public class RecoveryInstance {
     private final Command command;
     private InstanceStatus status;

@@ -4,21 +4,24 @@ import java.util.Map;
 
 import edu.yuvyurchenko.jepaxos.epaxos.messages.ReplyData;
 
+/**
+ * Thread Locality (some fields require sync):
+ *  - created and published: protocol executing thread
+ *  - read & modified: both protocol and command executing thread.
+ *    command executing thread modifies only status
+ */
 public class Instance {
     // keys
     private final String replicaId;
     private final int instanceId;
-    
-    private Command command;
-    private Ballot ballot;
-    private InstanceStatus status;
-    private Attributes attributes;
-    private LeaderBookkeeping leaderBookkeeping;
 
-    // for Tarjan's algorithm
-    private int index;
-    private int lowLink;
-    private boolean onStack;
+    private final ReplyData replyData;
+    
+    private volatile Command command;
+    private volatile Ballot ballot;
+    private volatile InstanceStatus status;
+    private volatile Attributes attributes;
+    private volatile LeaderBookkeeping leaderBookkeeping;
 
     public Instance(String replicaId,
                     int instanceId,
@@ -33,6 +36,7 @@ public class Instance {
         this.status = status;
         this.attributes = attributes;
         this.leaderBookkeeping = null;
+        this.replyData = null;
     }
 
     public Instance(String replicaId,
@@ -48,7 +52,8 @@ public class Instance {
         this.ballot = ballot;
         this.status = status;
         this.attributes = attributes;
-        this.leaderBookkeeping = new LeaderBookkeeping(replyData, attributes.deps());
+        this.leaderBookkeeping = new LeaderBookkeeping(attributes.deps());
+        this.replyData = replyData;
     }
 
     public Instance(String replicaId,
@@ -57,7 +62,8 @@ public class Instance {
                     Ballot ballot,
                     InstanceStatus status,
                     Attributes attributes,
-                    LeaderBookkeeping leaderBookkeeping) {
+                    LeaderBookkeeping leaderBookkeeping,
+                    ReplyData replyData) {
         this.replicaId = replicaId;
         this.instanceId = instanceId;
         this.command = command;
@@ -65,6 +71,7 @@ public class Instance {
         this.status = status;
         this.attributes = attributes;
         this.leaderBookkeeping = leaderBookkeeping;
+        this.replyData = replyData;
     }
 
     public String getReplicaId() {
@@ -107,40 +114,16 @@ public class Instance {
         this.attributes = attributes;
     }
 
-    public int getIndex() {
-        return index;
-    }
-
-    public void setIndex(int index) {
-        this.index = index;
-    }
-
-    public int getLowLink() {
-        return lowLink;
-    }
-
-    public void setLowLink(int lowLink) {
-        this.lowLink = lowLink;
-    }
-
-    public boolean isOnStack() {
-        return onStack;
-    }
-
-    public void setOnStack(boolean onStack) {
-        this.onStack = onStack;
-    }
-
     public LeaderBookkeeping leaderBookkeeping() {
         return leaderBookkeeping;
     }
 
+    public ReplyData replyData() {
+        return replyData;
+    }
+
     public void switchToRecoveryLeaderBookkeeping() {
-        if (this.leaderBookkeeping == null) {
-            this.leaderBookkeeping = new LeaderBookkeeping(null, Map.of(), true);
-        } else {
-            this.leaderBookkeeping = new LeaderBookkeeping(this.leaderBookkeeping.getReplyData(), Map.of(), true);
-        }
+        this.leaderBookkeeping = new LeaderBookkeeping(Map.of(), true);
     }
 
     public boolean isInitialBallot() {

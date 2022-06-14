@@ -1,0 +1,13 @@
+<!-- MAELSTROM uses stdin and stdout for inter-node transport emulation 
+     and stderr as a source of per-node logs -->
+<configuration>
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%date [%thread] - 5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="STDERR"/>
+    </root>
+</configuration>

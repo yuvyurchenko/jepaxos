@@ -19,6 +19,8 @@ public sealed interface InternalMessage extends NetworkMessage permits InternalM
                                                                        InternalMessage.TryPreAccept,
                                                                        InternalMessage.TryPreAcceptReply {
     
+    int instanceId();
+
     record PreAccept(String src, 
                      String dest,
                      MessageMetadata meta,
@@ -45,7 +47,7 @@ public sealed interface InternalMessage extends NetworkMessage permits InternalM
                           String dest,
                           MessageMetadata meta, 
                           String replicaId, 
-                          int instanceId, 
+                          int instanceId,
                           boolean ok, 
                           Ballot ballot, 
                           Attributes attributes,

@@ -25,10 +25,10 @@ public enum CommandOperations {
     CAS("cas", new CommandOperation() {
         public Object execute(Storage storage, Command command) throws Error {
             if (!storage.contains(command.key())) {
-                throw new Error(20, "unknown key");
+                throw new Error(20, "not found");
             }
             if (!storage.cas(command.key(), command.value(), command.ifValue())) {
-                throw new Error(22, "wrong expected value");
+                throw new Error(22, "expected " + command.ifValue() + " but had " + storage.get(command.key()));
             }
             return command.value();
         }

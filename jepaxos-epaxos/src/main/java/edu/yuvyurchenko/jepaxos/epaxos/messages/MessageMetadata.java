@@ -13,5 +13,10 @@ public class MessageMetadata {
     public void put(String name, Object value) {
         ctx.put(name, value);
     }
+
+    @Override
+    public String toString() {
+        return "MessageMetadata [" + ctx + "]";
+    }
     
 }

@@ -14,6 +14,7 @@ import edu.yuvyurchenko.jepaxos.epaxos.ReplicaBuilder;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Storage;
 import edu.yuvyurchenko.jepaxos.maelstrom.impl.CommandOperations;
+import edu.yuvyurchenko.jepaxos.maelstrom.impl.CurrentThreadExecutingDriver;
 import edu.yuvyurchenko.jepaxos.maelstrom.impl.InMemoryStorage;
 import edu.yuvyurchenko.jepaxos.maelstrom.impl.JsonNetwork;
 import edu.yuvyurchenko.jepaxos.maelstrom.impl.PojoCluster;
@@ -32,21 +33,22 @@ public class NodeRunner {
         });
 
         while (true) {
-            var msgStr = stdin.readLine();
-            if (isPoisonPill(msgStr)) {
-                break;
+            try {
+                var msgStr = stdin.readLine();
+                if (isPoisonPill(msgStr)) {
+                    break;
+                }
+                var msg = new Message(mapper.readTree(msgStr));
+                var type = msg.getType();
+                switch(type) {
+                    case init -> node.handleInit(msg);
+                    default -> node.handleMessage(msg);
+                }
+            } catch (Exception e) {
+                System.err.println(e);
+                e.printStackTrace(System.err);
             }
-            var msg = new Message(mapper.readTree(msgStr));
-            var type = msg.getType();
-            switch(type) {
-                // external messages
-                case init -> node.handleInit(msg);
-                default -> node.handleMessage(msg);
-                // case "read" -> node.handleRead(body);
-                // case "write" -> node.handleWrite(body);
-                // case "cas" -> node.handleCas(body);
-                // internal messages
-            }
+            
         }
         if (node.replica != null) {
             node.replica.shutdown();
@@ -57,12 +59,14 @@ public class NodeRunner {
         final Consumer<Message> outChannel;
         final AtomicInteger msgIdCounter;
         final JsonNetwork network;
+        final CurrentThreadExecutingDriver driver;
         volatile Replica replica;
 
         Node(Consumer<Message> outChannel) {
             this.outChannel = outChannel;
             this.msgIdCounter = new AtomicInteger();
             this.network = new JsonNetwork(outChannel, msgIdCounter);
+            this.driver = new CurrentThreadExecutingDriver();
         }
 
         void handleInit(Message msg) {
@@ -75,9 +79,13 @@ public class NodeRunner {
                 .withCluster(cluster)
                 .withNetwork(network)
                 .withStorage(storage)
+                .withCustomExecutingDriver(driver)
                 .withCommandOparetion(CommandOperations.GET.id(), CommandOperations.GET.operation())
                 .withCommandOparetion(CommandOperations.PUT.id(), CommandOperations.PUT.operation())
                 .withCommandOparetion(CommandOperations.CAS.id(), CommandOperations.CAS.operation())
+                .withCommitGracePeriodMs(1000L)
+                .withWaitCommitPeriodMs(0)
+                .withMaxWaitCommitTries(0)
                 .build();
             
             this.replica = replica;
@@ -102,10 +110,12 @@ public class NodeRunner {
                 resp.setMsgId(msgIdCounter.getAndIncrement());
                 resp.setCode(22);
                 resp.setText("replica must be initialized first");
-                outChannel.accept(resp);    
+                outChannel.accept(resp);
+                return;    
             }
-
+            
             network.receive(msg);
+            driver.executeScheduled();
         }
     }
 

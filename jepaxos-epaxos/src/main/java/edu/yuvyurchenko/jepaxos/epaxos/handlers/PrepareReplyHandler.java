@@ -3,9 +3,15 @@ package edu.yuvyurchenko.jepaxos.epaxos.handlers;
 import java.util.Map;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import edu.yuvyurchenko.jepaxos.epaxos.CommandOperationRegistry;
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace;
-import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.*;
+import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.Accept;
+import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.Commit;
+import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.PrepareReply;
+import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.TryPreAccept;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Attributes;
 import edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
@@ -13,6 +19,8 @@ import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
 public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
     
+    private static final Logger LOGGER = LoggerFactory.getLogger(PrepareReplyHandler.class);
+
     public PrepareReplyHandler(Cluster cluster, 
                                Network network, 
                                InstanceSpace instanceSpace, 
@@ -21,15 +29,18 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
     }
 
     public void handle(PrepareReply prepareReply) {
+        LOGGER.debug("Receive - prepareReply={}", prepareReply);
         var instance = instanceSpace.getInstance(prepareReply.replicaId(), prepareReply.instanceId());
         var lb = instance.leaderBookkeeping();
         if (lb == null || !lb.getPreparing()) {
             // we've moved on -- these are delayed replies, so just ignore
 		    // TODO: should replies for non-current ballots be ignored?
+            LOGGER.debug("Exit - delayed reply");
 		    return;
         }
         if (!prepareReply.ok()) {
             lb.incNacks();
+            LOGGER.debug("Exit - rejected Prepare");
             return;
         }
         lb.incPrepareOKs();
@@ -48,10 +59,11 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                  prepareReply.instanceId(), 
                                                  instance.getCommand(), 
                                                  prepareReply.attributes()));
+            LOGGER.debug("Exit - broadcast Commit");
             return;
         }
         if (prepareReply.status() == InstanceStatus.ACCEPTED) {
-            if (lb.recovertInstance() == null || lb.getMaxRecvBallot().lessThan(prepareReply.ballot())) {
+            if (lb.recoveryInstance() == null || lb.getMaxRecvBallot() == null || lb.getMaxRecvBallot().lessThan(prepareReply.ballot())) {
                 lb.initRecoveryInstance(prepareReply.command(), 
                                         prepareReply.status(), 
                                         prepareReply.attributes(), 
@@ -61,17 +73,17 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
             }
         }
         if ((prepareReply.status() == InstanceStatus.PREACCEPTED || prepareReply.status() == InstanceStatus.PREACCEPTED_EQ) 
-            && (lb.recovertInstance() == null || lb.recovertInstance().getStatus() == InstanceStatus.NONE 
-                                              || lb.recovertInstance().getStatus() == InstanceStatus.PREACCEPTED 
-                                              || lb.recovertInstance().getStatus() == InstanceStatus.PREACCEPTED_EQ)) {
-            if (lb.recovertInstance() == null) {
+            && (lb.recoveryInstance() == null || lb.recoveryInstance().getStatus() == InstanceStatus.NONE 
+                                              || lb.recoveryInstance().getStatus() == InstanceStatus.PREACCEPTED 
+                                              || lb.recoveryInstance().getStatus() == InstanceStatus.PREACCEPTED_EQ)) {
+            if (lb.recoveryInstance() == null) {
                 lb.initRecoveryInstance(prepareReply.command(), 
                                         prepareReply.status(), 
                                         prepareReply.attributes(), 
                                         1, 
                                         false);
             } else if (Objects.equals(prepareReply.attributes(), instance.getAttributes())) {
-                lb.recovertInstance().incPreAcceptCount();
+                lb.recoveryInstance().incPreAcceptCount();
             } else if (prepareReply.status() == InstanceStatus.PREACCEPTED_EQ) {
                 // If we get different ordering attributes from pre-acceptors, we must go with the ones
 			    // that agreed with the initial command leader (in case we do not use Thrifty).
@@ -84,17 +96,19 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
             }
             if (Objects.equals(prepareReply.acceptorId(), prepareReply.replicaId())) {
                 //if the reply is from the initial command leader, then it's safe to restart phase 1
-                lb.recovertInstance().setLeaderResponded(true);
+                lb.recoveryInstance().setLeaderResponded(true);
+                LOGGER.debug("Exit - Leader Responded");
                 return;
             }
         }
         if (lb.getPrepareOKs() < cluster.getAllReplicaIds().size() / 2) {
+            LOGGER.debug("Exit - Not enough replies for quorum");
             return;
         }
 
         //Received Prepare replies from a majority
 
-        var ri = lb.recovertInstance();
+        var ri = lb.recoveryInstance();
 
         if (ri != null) {
             if (ri.getStatus() == InstanceStatus.ACCEPTED 
@@ -129,7 +143,7 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                       prepareReply.instanceId(), 
                                       instance.getBallot(), 
                                       ri.getCommand(), 
-                                      lb.getReplyData());
+                                      instance.replyData());
                         return;
                     } else {
                         lb.setNacks(1);
@@ -152,6 +166,7 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                            instance.getBallot(), 
                                                            instance.getCommand(), 
                                                            instance.getAttributes()));
+                LOGGER.debug("Exit - broadcast TryPreAccept");
             } else {
                 //start Phase1 in the initial leader's instance
                 lb.setPreparing(false);
@@ -159,7 +174,7 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                               prepareReply.instanceId(), 
                               instance.getBallot(), 
                               ri.getCommand(), 
-                              lb.getReplyData());
+                              instance.replyData());
             }
         } else {
             var noopDeps = Map.of(prepareReply.replicaId(), prepareReply.instanceId() - 1);
@@ -179,6 +194,7 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                  instance.getBallot(), 
                                                  null, 
                                                  new Attributes(0, noopDeps)));
+            LOGGER.debug("Exit - broadcast Accept");
         }
     }
 

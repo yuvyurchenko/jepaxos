@@ -1,6 +1,5 @@
 package edu.yuvyurchenko.jepaxos.epaxos;
 
-import java.util.HashMap;
 import java.util.Map;
 
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.CommandOperation;

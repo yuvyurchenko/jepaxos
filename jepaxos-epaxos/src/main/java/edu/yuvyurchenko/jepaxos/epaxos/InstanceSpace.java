@@ -1,17 +1,18 @@
 package edu.yuvyurchenko.jepaxos.epaxos;
 
-import static java.util.stream.Collectors.toMap;
 import static java.util.stream.Collectors.toUnmodifiableMap;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -23,35 +24,46 @@ import edu.yuvyurchenko.jepaxos.epaxos.model.Instance;
 import edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
 
+import static edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus.*;
+
+/**
+ * Thread Locality (some fields require sync):
+ *  - created and published: protocol executing thread
+ *  - read & modified: both protocol and command executing thread.
+ *    command executing thread modifies only executedUpTo field
+ */
 public class InstanceSpace {
     private final Cluster cluster;
     private final Map<String, ReplicaMetadata> metadata;
     private final Map<Object, Integer> maxSeqPerKey;
+    private final Map<DeferKey, DeferKey> deferMap;
     private int maxSeq;
-    private Map<DeferKey, DeferKey> deferMap;
 
     InstanceSpace(Cluster cluster) {
         this.cluster = cluster;
         this.metadata = cluster.getAllReplicaIds().stream()
-            .collect(toMap(i -> i, i -> new ReplicaMetadata()));
+            .collect(toUnmodifiableMap(i -> i, i -> new ReplicaMetadata(i)));
         this.maxSeqPerKey = new HashMap<>();
+        this.deferMap = new HashMap<>();
     }
 
     public Instance registerNewCommandLeaderInstance(Command command, ReplyData replyData) {
-        var attributes = createAttributes(command);
-
-        var replicaId = cluster.getCurrReplicaId();
-        var instance = new Instance(replicaId,
-                                    metadata.get(replicaId).instances.size(), 
-                                    command, 
-                                    new Ballot(0, replicaId), 
-                                    InstanceStatus.PREACCEPTED, 
-                                    attributes,
-                                    replyData);
-
-        metadata.get(replicaId).instances.add(instance);
-        
-        return instance;
+        var meta = metadata.get(cluster.getCurrReplicaId());
+        meta.rwLock.writeLock().lock();
+        try {
+            var attributes = createAttributes(command);
+            var instance = new Instance(cluster.getCurrReplicaId(),
+                                        meta.instances.size(), 
+                                        command, 
+                                        new Ballot(0, cluster.getCurrReplicaId()), 
+                                        PREACCEPTED, 
+                                        attributes,
+                                        replyData);
+            meta.instances.add(new Cell(instance.getReplicaId(), instance.getInstanceId(), instance));
+            return instance;
+        } finally {
+            meta.rwLock.writeLock().unlock();
+        }
     }
 
     public Instance resetCommandLeaderInstance(String sourceReplicaId, 
@@ -59,24 +71,23 @@ public class InstanceSpace {
                                                Ballot ballot, 
                                                Command command, 
                                                ReplyData replyData) {
-        var updAttributes = updateAttributes(sourceReplicaId, instanceId, command, new Attributes(0, Map.of()));
-        
-        
-        var instance = new Instance(cluster.getCurrReplicaId(),
-                                    instanceId, 
-                                    command, 
-                                    ballot, 
-                                    InstanceStatus.PREACCEPTED, 
-                                    updAttributes.attributes(),
-                                    replyData);
-
-        var slots = metadata.get(cluster.getCurrReplicaId()).instances;
-        if (slots.size() <= instanceId) {
-            IntStream.rangeClosed(slots.size(), instanceId + 1).forEach(i -> slots.add(null));
+        var meta = metadata.get(cluster.getCurrReplicaId());
+        meta.rwLock.writeLock().lock();
+        try {
+            var updAttributes = updateAttributes(sourceReplicaId, instanceId, command, new Attributes(0, Map.of()));
+            meta.adjustCells(instanceId);
+            var instance = new Instance(cluster.getCurrReplicaId(),
+                                        instanceId, 
+                                        command, 
+                                        ballot, 
+                                        PREACCEPTED, 
+                                        updAttributes.attributes(),
+                                        replyData);
+            meta.instances.get(instanceId).setInstance(instance);
+            return instance;
+        } finally {
+            meta.rwLock.writeLock().unlock();
         }
-        slots.set(instanceId, instance);
-        
-        return instance;
     }
 
     public Instance registerNewInstance(String replicaId, 
@@ -85,13 +96,16 @@ public class InstanceSpace {
                                         Ballot ballot, 
                                         InstanceStatus status, 
                                         Attributes attributes) {
-        var instance = new Instance(replicaId, instanceId, command, ballot, status, attributes);
-        var slots = metadata.get(replicaId).instances;
-        if (slots.size() <= instanceId) {
-            IntStream.rangeClosed(slots.size(), instanceId + 1).forEach(i -> slots.add(null));
+        var meta = metadata.get(replicaId);
+        meta.rwLock.writeLock().lock();
+        try {
+            meta.adjustCells(instanceId);
+            var instance = new Instance(replicaId, instanceId, command, ballot, status, attributes);
+            meta.instances.get(instanceId).setInstance(instance);
+            return instance;
+        } finally {
+            meta.rwLock.writeLock().unlock();
         }
-        slots.set(instanceId, instance);
-        return instance;
     }
 
     public Instance registerNewInstance(String replicaId, 
@@ -100,27 +114,37 @@ public class InstanceSpace {
                                         InstanceStatus status, 
                                         Attributes attributes,
                                         Instance srcInstance) {
-        var instance = new Instance(replicaId, 
-                                    instanceId, 
-                                    command, 
-                                    srcInstance.getBallot(), 
-                                    status, 
-                                    attributes, 
-                                    srcInstance.leaderBookkeeping());
-        var slots = metadata.get(replicaId).instances;
-        if (slots.size() <= instanceId) {
-            IntStream.rangeClosed(slots.size(), instanceId + 1).forEach(i -> slots.add(null));
+        var meta = metadata.get(replicaId);
+        meta.rwLock.writeLock().lock();
+        try {
+            var instance = new Instance(replicaId, 
+                                        instanceId, 
+                                        command, 
+                                        srcInstance.getBallot(), 
+                                        status, 
+                                        attributes, 
+                                        srcInstance.leaderBookkeeping(),
+                                        srcInstance.replyData());
+            meta.adjustCells(instanceId);
+            meta.instances.get(instanceId).setInstance(instance);
+            return instance;
+        } finally {
+            meta.rwLock.writeLock().unlock();
         }
-        slots.set(instanceId, instance);
-        return instance;
     }
 
     public Instance getInstance(String replicaId, int instanceId) {
-        var instances = metadata.get(replicaId).instances;
-        if (instances.size() > instanceId) {
-            return instances.get(instanceId);
+        var meta = metadata.get(replicaId);
+        meta.rwLock.readLock().lock();
+        try {
+            var instances = meta.instances;
+            if (instances.size() > instanceId) {
+                return instances.get(instanceId).getInstance();
+            }
+            return null;
+        } finally {
+            meta.rwLock.readLock().unlock();
         }
-        return null;
     }
 
     private Attributes createAttributes(Command command) {
@@ -136,7 +160,7 @@ public class InstanceSpace {
             .mapToInt(i -> i.getAttributes().seq() + 1)
             .max().orElse(0);
         
-        int knownMaxSeq = maxSeqPerKey.getOrDefault(command.key(), -1);
+        int knownMaxSeq = maxSeqPerKey(command.key());
         if (knownMaxSeq >= seq) {
             seq = knownMaxSeq + 1;
         }
@@ -145,10 +169,12 @@ public class InstanceSpace {
     }
 
     public void adjustCrtInstanceId(String replicaId, int knownInstanceId) {
-        var slots = metadata.get(replicaId).instances;
-        int crtInstanceId = slots.size();
-        if (knownInstanceId >= crtInstanceId) {
-            IntStream.range(slots.size(), knownInstanceId + 1).forEach(i -> slots.add(null));
+        var meta = metadata.get(replicaId);
+        meta.rwLock.writeLock().lock();
+        try {
+            meta.adjustCells(knownInstanceId);
+        } finally {
+            meta.rwLock.writeLock().unlock();
         }
     }
 
@@ -160,7 +186,7 @@ public class InstanceSpace {
         
         var deltaDeps = replicaConflicts()
             .filter(rc -> !rc.replicaId().equals(sourceReplicaId))
-            .filter(rc -> rc.conflicts().getOrDefault(key, -1) > attributes.deps().getOrDefault(rc.replicaId(), -1))
+            .filter(rc -> rc.conflict(key) > attributes.dep(rc.replicaId()))
             .collect(toUnmodifiableMap(
                 rc -> rc.replicaId(), 
                 rc -> rc.conflicts().get(key)));
@@ -172,13 +198,15 @@ public class InstanceSpace {
             .mapToInt(i -> i.getAttributes().seq() + 1)
             .max().orElse(attributes.seq());
         
-        int knownMaxSeq = maxSeqPerKey.getOrDefault(command.key(), -1);
+        int knownMaxSeq = maxSeqPerKey(command.key());
         if (knownMaxSeq >= newSeq) {
             newSeq = knownMaxSeq + 1;
             changed = true;
         }
 
-        var newDeps = Stream.of(deltaDeps, attributes.deps()).map(Map::entrySet).flatMap(Set::stream)
+        var newDeps = Stream.of(deltaDeps, attributes.deps())
+            .map(Map::entrySet)
+            .flatMap(Set::stream)
             .collect(toUnmodifiableMap(
                 Map.Entry::getKey, 
                 Map.Entry::getValue, 
@@ -202,8 +230,8 @@ public class InstanceSpace {
                     newDeps.put(k, a1.deps().get(k));
                 }
             } else {
-                int v1 = a1.deps().getOrDefault(k, -1);
-                int v2 = a2.deps().getOrDefault(k, -1);
+                int v1 = a1.dep(k);
+                int v2 = a2.dep(k);
                 equal = equal && v1 == v2;
                 int newVal = Math.max(v1, v2);
                 newDeps.put(k, newVal);
@@ -234,7 +262,7 @@ public class InstanceSpace {
         }
 
         int newSeq = seq;
-        int maxSeq = maxSeqPerKey.getOrDefault(key, -1);
+        int maxSeq = maxSeqPerKey(key);
         if (maxSeq < newSeq) {
             maxSeqPerKey.put(key, newSeq);
         }
@@ -247,13 +275,13 @@ public class InstanceSpace {
 
     public boolean updateCommittedDeps(Instance instance, Map<String, Integer> srcDeps) {
         var lb = instance.leaderBookkeeping();
-        var deps = instance.getAttributes().deps();
+        var attrs = instance.getAttributes();
 
         boolean allCommitted = true;
         for (var replicaId : metadata.keySet()) {
             var commitedUpTo = metadata.get(replicaId).commitedUpTo;
             var srcDep = srcDeps.getOrDefault(replicaId, -1);
-            var dep = deps.get(replicaId);
+            var dep = attrs.dep(replicaId);
 
             if (lb.getCommittedDep(replicaId) < srcDep) {
                 lb.putCommittedDep(replicaId, srcDep);
@@ -271,10 +299,16 @@ public class InstanceSpace {
 
     public void updateCommitted(String replicaId) {
         var meta = metadata.get(replicaId);
-        int nextCommitted = meta.commitedUpTo + 1;
-        var instance = meta.instances.get(nextCommitted);
-        if (instance != null && instance.getStatus() == InstanceStatus.COMMITTED || instance.getStatus() == InstanceStatus.EXECUTED) {
-            meta.commitedUpTo++;
+        meta.rwLock.readLock().lock();
+        try {
+            int nextCommitted = meta.commitedUpTo + 1;
+            var instance = meta.instances.get(nextCommitted).getInstance();
+            if (instance != null && (instance.getStatus() == COMMITTED 
+                                  || instance.getStatus() == EXECUTED)) {
+                meta.commitedUpTo++;
+            }
+        } finally {
+            meta.rwLock.readLock().unlock();
         }
     }
 
@@ -285,14 +319,6 @@ public class InstanceSpace {
                 e -> e.getValue().commitedUpTo));
     }
     
-    public int getExecutedUpTo(String replicaId) {
-        return metadata.get(replicaId).executedUpTo;
-    }
-
-    public void putExecutedUpTo(String replicaId, int instanceId) {
-        metadata.get(replicaId).executedUpTo = instanceId;
-    }
-
     public int getMaxSeq() {
         return maxSeq;
     }
@@ -310,27 +336,78 @@ public class InstanceSpace {
         return e -> bp.test(e.getKey(), e.getValue());
     }
 
-    public List<Instance> notExecutedInstances(String replicaId) {
-        int executedUpTo = metadata.get(replicaId).executedUpTo;
-        var slots = metadata.get(replicaId).instances;
-        return slots.subList(executedUpTo + 1, slots.size());
+    public void moveExecutedUpTo(String replicaId, int instanceId) {
+        var meta = metadata.get(replicaId);
+        meta.rwLock.writeLock().lock();
+        try {
+            var nextExecuted = meta.executedUpTo + 1;
+            if (instanceId == nextExecuted) {
+                meta.executedUpTo = instanceId;
+            }
+        } finally {
+            meta.rwLock.writeLock().unlock();
+        }
     }
 
-    public List<Integer> notExecutedInstanceIds(String replicaId) {
-        int executedUpTo = metadata.get(replicaId).executedUpTo;
-        var slots = metadata.get(replicaId).instances;
-        return IntStream.range(executedUpTo + 1, slots.size()).boxed().collect(Collectors.toList());
+    public List<Cell> notExecutedInstances(String replicaId) {
+        var meta = metadata.get(replicaId);
+        meta.rwLock.readLock().lock();
+        try {
+            int start = meta.executedUpTo + 1;
+            int end = meta.instances.size();
+            if (start < end) {
+                return meta.instances.subList(start, end);
+            }
+            return Collections.emptyList();
+        } finally {
+            meta.rwLock.readLock().unlock();
+        }
     }
 
-    public List<Instance> notExecutedInstances(String replicaId, int upperBoundInstanceId) {
-        int executedUpTo = metadata.get(replicaId).executedUpTo;
-        var slots = metadata.get(replicaId).instances;
-        return slots.subList(executedUpTo + 1, upperBoundInstanceId+1);
+    public int[] notExecutedInstanceIds(String replicaId) {
+        var meta = metadata.get(replicaId);
+        meta.rwLock.readLock().lock();
+        try {
+            int start = meta.executedUpTo + 1;
+            int end = meta.instances.size();
+            if (start < end) {
+                return IntStream.range(start, end).toArray();
+            }
+            return new int[0];
+        } finally {
+            meta.rwLock.readLock().unlock();
+        }
     }
 
-    public List<Integer> notExecutedInstanceIds(String replicaId, int upperBoundInstanceId) {
-        int executedUpTo = metadata.get(replicaId).executedUpTo;
-        return IntStream.rangeClosed(executedUpTo + 1, upperBoundInstanceId).boxed().collect(Collectors.toList());
+    public List<Cell> notExecutedInstances(String replicaId, int upperBoundInstanceId) {
+        var meta = metadata.get(replicaId);
+        meta.rwLock.readLock().lock();
+        try {
+            int start = meta.executedUpTo + 1;
+            int end = upperBoundInstanceId + 1;
+            if (start < end) {
+                meta.adjustCells(upperBoundInstanceId);
+                return meta.instances.subList(start, end);
+            }
+            return Collections.emptyList();
+        } finally {
+            meta.rwLock.readLock().unlock();
+        }
+    }
+
+    public int[] notExecutedInstanceIds(String replicaId, int upperBoundInstanceId) {
+        var meta = metadata.get(replicaId);
+        meta.rwLock.readLock().lock();
+        try {
+            int start = meta.executedUpTo + 1;
+            int end = upperBoundInstanceId;
+            if (start <= end) {
+                return IntStream.rangeClosed(start, end).toArray();
+            }
+            return new int[0];
+        } finally {
+            meta.rwLock.readLock().unlock();
+        }
     }
 
     public void updateDeferred(String dReplicaId, int dInstanceId, String replicaId, int instanceId) {
@@ -348,17 +425,70 @@ public class InstanceSpace {
         return new DeferCheck(true, daux);
     }
 
+    private int maxSeqPerKey(Object key) {
+        return maxSeqPerKey.getOrDefault(key, -1);
+    }
+
     private static class ReplicaMetadata {
-        private final ArrayList<Instance> instances = new ArrayList<>();
-        private final Map<Object, Integer> conflicts = new HashMap<>();
-        private int commitedUpTo;
+        // guards instances and executedUpTo since all other fields 
+        // are changed in the protocol executing thread only
+        private final ReadWriteLock rwLock = new ReentrantReadWriteLock();
+        private final String replicaId;
         private int executedUpTo = -1;
+        private final List<Cell> instances = new ArrayList<>();
+        // protocol executing thread specific
+        private final Map<Object, Integer> conflicts = new HashMap<>();
+        private int commitedUpTo = -1;
+
+        ReplicaMetadata(String replicaId) {
+            this.replicaId = replicaId;
+        }
+
+        void adjustCells(int upperInstanceId) {
+            if (instances.size() <= upperInstanceId) {
+                IntStream.rangeClosed(instances.size(), upperInstanceId).forEach(i -> 
+                    instances.add(new Cell(replicaId, i, null)));
+            }
+        }
     }
 
     public static record DeferKey(String replicaId, int instanceId) {}
     public static record DeferCheck(boolean deffer, DeferKey key) {}
     public static record AttributesUpdateResult(boolean changed, Attributes attributes) {}
     public static record AttributesMergeResult(boolean equal, Attributes attributes) {}
-    public static record ReplicaConflict(String replicaId, Map<Object, Integer> conflicts) {}
+    public static record ReplicaConflict(String replicaId, Map<Object, Integer> conflicts) {
+        public int conflict(Object key) {
+            return conflicts.getOrDefault(key, -1);
+        }
+    }
+
+    public static class Cell {
+        private final String replicaId;
+        private final int instanceId;
+        private volatile Instance instance;
+
+        private Cell(String replicaId, int instanceId, Instance instance) {
+            this.replicaId = replicaId;
+            this.instanceId = instanceId;
+            this.instance = instance;
+        }
+
+        public String getReplicaId() {
+            return replicaId;
+        }
+
+        public int getInstanceId() {
+            return instanceId;
+        }
+
+        public Instance getInstance() {
+            return instance;
+        }
+
+        public void setInstance(Instance instance) {
+            this.instance = instance;
+        }
+
+    }
 
 }

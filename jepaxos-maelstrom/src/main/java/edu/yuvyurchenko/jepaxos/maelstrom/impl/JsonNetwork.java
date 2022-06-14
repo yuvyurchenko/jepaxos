@@ -1,7 +1,6 @@
 package edu.yuvyurchenko.jepaxos.maelstrom.impl;
 
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -19,7 +18,6 @@ import edu.yuvyurchenko.jepaxos.maelstrom.MessageType;
 public class JsonNetwork implements Network {
     
     private static final String MSG_ID = "msg_id";
-    private static final String RESP_TYPE = "resp_type";
     
     private final Consumer<Message> outChannel;
     private final AtomicInteger msgIdCounter;
@@ -38,6 +36,8 @@ public class JsonNetwork implements Network {
             outChannel.accept(fromReadReply(r));
         } else if (msg instanceof RequestReply r) {
             outChannel.accept(fromRequestReply(r));
+        } else if (msg instanceof RequestAndReadReply r) {
+            outChannel.accept(fromRequestAndReadReply(r));
         } else if (msg instanceof Accept r) {
             outChannel.accept(fromAccept(r));
         } else if (msg instanceof AcceptReply r) {
@@ -72,7 +72,7 @@ public class JsonNetwork implements Network {
             // external
             case read -> toRead(msg);
             case write -> toRequest(msg);
-            case cas -> toRequest(msg);
+            case cas -> toRequestAndRead(msg);
             // internal
             case accept -> toAccept(msg);
             case accept_reply -> toAcceptReply(msg);
@@ -84,7 +84,7 @@ public class JsonNetwork implements Network {
             case prepare_reply -> toPrepareReply(msg);
             case trypreaccept -> toTryPreAccept(msg);
             case trypreaccept_reply -> toTryPreAcceptReply(msg);
-            default -> throw new IllegalArgumentException("Unknown message type" + type);
+            default -> throw new IllegalArgumentException("Unknown message type " + type);
         };
         var handler = handlerRegistry.get(networkMessage.getClass());
         if (handler == null) {
@@ -98,20 +98,20 @@ public class JsonNetwork implements Network {
     private Read toRead(Message msg) {
         var meta = new MessageMetadata();
         meta.put(MSG_ID, msg.getMsgId());
-        var command = new Command(CommandOperations.GET.name(), msg.getKey(), null, null);
+        var command = new Command(CommandOperations.GET.id(), msg.getKey(), null, null);
         return new Read(msg.getSrc(), msg.getDest(), meta, command);
     }
 
     private Message fromReadReply(ReadReply reply) {
         int msgId = reply.meta().get(MSG_ID);
         var msg = new Message();
-        msg.setSrc(reply.dest());
-        msg.setDest(reply.src());
+        msg.setSrc(reply.src());
+        msg.setDest(reply.dest());
         msg.setInReplyTo(msgId);
         msg.setMsgId(msgIdCounter.getAndIncrement());
         if (reply.ok()) {
             msg.setType(MessageType.read_ok);
-            msg.setValue(Objects.toString(reply.value(), null));
+            msg.setValue(reply.value());
         } else {
             msg.setType(MessageType.error);
             msg.setCode(reply.errorCode());
@@ -123,27 +123,43 @@ public class JsonNetwork implements Network {
     private Request toRequest(Message msg) {
         var meta = new MessageMetadata();
         meta.put(MSG_ID, msg.getMsgId());
-        Command command;
-        if (msg.getType() == MessageType.write) {
-            meta.put(RESP_TYPE, MessageType.write_ok);
-            command = new Command(CommandOperations.PUT.name(), msg.getKey(), msg.getValue(), null);
-        } else { // cas
-            meta.put(RESP_TYPE, MessageType.cas_ok);
-            command = new Command(CommandOperations.CAS.name(), msg.getKey(), msg.getTo(), msg.getFrom());
-        }
+        var command = new Command(CommandOperations.PUT.id(), msg.getKey(), msg.getValue(), null);
         return new Request(msg.getSrc(), msg.getDest(), meta, command);
     }
 
     private Message fromRequestReply(RequestReply reply) {
         int msgId = reply.meta().get(MSG_ID);
         var msg = new Message();
-        msg.setSrc(reply.dest());
-        msg.setDest(reply.src());
-        msg.setType(reply.meta().get(RESP_TYPE));
+        msg.setSrc(reply.src());
+        msg.setDest(reply.dest());
         msg.setInReplyTo(msgId);
         msg.setMsgId(msgIdCounter.getAndIncrement());
         if (reply.ok()) {
-            msg.setType(reply.meta().get(RESP_TYPE));
+            msg.setType(MessageType.write_ok);
+        } else {
+            msg.setType(MessageType.error);
+            msg.setCode(reply.errorCode());
+            msg.setText(reply.errorText());
+        }
+        return msg;
+    }
+
+    private RequestAndRead toRequestAndRead(Message msg) {
+        var meta = new MessageMetadata();
+        meta.put(MSG_ID, msg.getMsgId());
+        var command = new Command(CommandOperations.CAS.id(), msg.getKey(), msg.getTo(), msg.getFrom());
+        return new RequestAndRead(msg.getSrc(), msg.getDest(), meta, command);
+    }
+
+    private Message fromRequestAndReadReply(RequestAndReadReply reply) {
+        int msgId = reply.meta().get(MSG_ID);
+        var msg = new Message();
+        msg.setSrc(reply.src());
+        msg.setDest(reply.dest());
+        msg.setInReplyTo(msgId);
+        msg.setMsgId(msgIdCounter.getAndIncrement());
+        if (reply.ok()) {
+            msg.setType(MessageType.cas_ok);
         } else {
             msg.setType(MessageType.error);
             msg.setCode(reply.errorCode());

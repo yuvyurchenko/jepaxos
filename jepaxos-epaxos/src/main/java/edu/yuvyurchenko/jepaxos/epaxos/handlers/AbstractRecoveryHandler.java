@@ -3,17 +3,24 @@ package edu.yuvyurchenko.jepaxos.epaxos.handlers;
 import edu.yuvyurchenko.jepaxos.epaxos.CommandOperationRegistry;
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.*;
+import edu.yuvyurchenko.jepaxos.epaxos.messages.MessageMetadata;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.NetworkMessage;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.ReplyData;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Attributes;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Ballot;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Command;
-import edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
+import static edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus.*;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends AbstractHandler<M> {
     
+    private static final Logger LOGGER = LoggerFactory.getLogger(AbstractRecoveryHandler.class);
+
     private final CommandOperationRegistry operationRegistry;
 
     protected AbstractRecoveryHandler(Cluster cluster, 
@@ -25,6 +32,7 @@ public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends 
     }
 
     protected void restartPhase1(String replicaId, int instanceId, Ballot ballot, Command command, ReplyData replyData) {
+        LOGGER.debug("Start Recovery: replicaId={}, instanceId={}, ballot={}", replicaId, instanceId, ballot);
         var instance = instanceSpace.resetCommandLeaderInstance(replicaId,
                                                                 instanceId,
                                                                 ballot,
@@ -34,7 +42,7 @@ public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends 
 
         broadcast(extReplicaId -> new PreAccept(cluster.getCurrReplicaId(), 
                                                 extReplicaId,
-                                                replyData.meta(),
+                                                new MessageMetadata(),
                                                 instance.getReplicaId(), 
                                                 instance.getReplicaId(), 
                                                 instance.getInstanceId(), 
@@ -49,8 +57,8 @@ public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends 
         var instance = instanceSpace.getInstance(replicaId, instanceId);
 
         if (instance != null && command != null) {
-            if (instance.getStatus() == InstanceStatus.ACCEPTED || instance.getStatus() == InstanceStatus.COMMITTED 
-                                                                || instance.getStatus() == InstanceStatus.EXECUTED) {
+            if (instance.getStatus() == ACCEPTED || instance.getStatus() == COMMITTED 
+                                                 || instance.getStatus() == EXECUTED) {
                 // already ACCEPTED or COMMITTED
 			    // we consider this a conflict because we shouldn't regress to PRE-ACCEPTED
                 return new PreAcceptConflicts(true, replicaId, instanceId);
@@ -62,31 +70,32 @@ public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends 
         }
 
         for (var rId : cluster.getAllReplicaIds()) {
-            for (var i : instanceSpace.notExecutedInstances(rId)) {
+            for (var iCell : instanceSpace.notExecutedInstances(rId)) {
+                var i = iCell.getInstance();
                 if (i == null || i.getCommand() == null) {
                     continue;
                 }
-                if(replicaId.equals(i.getReplicaId()) && instanceId == i.getInstanceId()) {
+                if (replicaId.equals(i.getReplicaId()) && instanceId == i.getInstanceId()) {
                     // no point checking past instance in replica's row, since replica would have
                     // set the dependencies correctly for anything started after instance
                     break;
                 }
-                if (i.getInstanceId() == attributes.deps().getOrDefault(rId, -1)) {
+                if (i.getInstanceId() == attributes.dep(rId)) {
                     //the instance cannot be a dependency for itself
 				    continue;
                 }
-                if (i.getAttributes().deps().get(replicaId) >= instanceId) {
+                if (i.getAttributes().dep(replicaId) >= instanceId) {
                     // instance q.i depends on instance replica.instance, it is not a conflict
 				    continue;
                 }
                 if (inConflict(i.getCommand(), command)) {
-                    int depInstId = attributes.deps().getOrDefault(rId, -1);
+                    int depInstId = attributes.dep(rId);
                     if (i.getInstanceId() > depInstId 
                         || (i.getInstanceId() < depInstId && i.getAttributes().seq() >= attributes.seq() 
-                                                          && (!rId.equals(replicaId) || i.getStatus() == InstanceStatus.PREACCEPTED_EQ 
-                                                                                     || i.getStatus() == InstanceStatus.ACCEPTED 
-                                                                                     || i.getStatus() == InstanceStatus.COMMITTED 
-                                                                                     || i.getStatus() == InstanceStatus.EXECUTED))) {
+                                                          && (!rId.equals(replicaId) || i.getStatus() == PREACCEPTED_EQ 
+                                                                                     || i.getStatus() == ACCEPTED 
+                                                                                     || i.getStatus() == COMMITTED 
+                                                                                     || i.getStatus() == EXECUTED))) {
                         // this is a conflict
 					    return new PreAcceptConflicts(true, rId, i.getInstanceId());
                     }
