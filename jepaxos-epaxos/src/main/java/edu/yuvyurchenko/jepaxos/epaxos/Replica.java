@@ -56,6 +56,7 @@ public class Replica {
             ExecutingDriver driver,
             CommandOperationRegistry operationRegistry,
             long commitGracePeriodMs,
+            long commitGracePeriodShiftMs,
             long waitCommitPeriodMs,
             int maxWaitCommitTries) {
         this.instanceSpace = new InstanceSpace(cluster);
@@ -68,6 +69,7 @@ public class Replica {
                                                      operationRegistry,
                                                      driver, 
                                                      commitGracePeriodMs,
+                                                     commitGracePeriodShiftMs,
                                                      waitCommitPeriodMs,
                                                      maxWaitCommitTries);
 

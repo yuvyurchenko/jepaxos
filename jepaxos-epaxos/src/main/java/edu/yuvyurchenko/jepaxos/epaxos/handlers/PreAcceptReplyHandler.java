@@ -40,7 +40,7 @@ public class PreAcceptReplyHandler extends AbstractHandler<PreAcceptReply> {
         if (!preAcceptReply.ok()) {
             // there is probably another active leader
             lb.incNacks();
-            if (preAcceptReply.ballot().greaterThan(lb.getMaxRecvBallot())) {
+            if (lb.getMaxRecvBallot() == null || preAcceptReply.ballot().greaterThan(lb.getMaxRecvBallot())) {
                 lb.setMaxRecvBallot(preAcceptReply.ballot());
             }
             LOGGER.debug("Exit - got rejected, stop the flow");

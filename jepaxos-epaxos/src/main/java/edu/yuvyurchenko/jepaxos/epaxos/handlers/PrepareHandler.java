@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace;
-import edu.yuvyurchenko.jepaxos.epaxos.Replica;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.*;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Attributes;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Ballot;

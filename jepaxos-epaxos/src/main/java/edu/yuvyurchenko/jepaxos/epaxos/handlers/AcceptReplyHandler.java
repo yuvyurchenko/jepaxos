@@ -36,7 +36,7 @@ public class AcceptReplyHandler extends AbstractHandler<AcceptReply> {
         var lb = instance.leaderBookkeeping();
         if (!acceptReply.ok()) {
             lb.incNacks();
-            if (acceptReply.ballot().greaterThan(lb.getMaxRecvBallot())) {
+            if (lb.getMaxRecvBallot() == null || acceptReply.ballot().greaterThan(lb.getMaxRecvBallot())) {
                 lb.setMaxRecvBallot(acceptReply.ballot());
             }
             LOGGER.debug("Exit - rejected accept");

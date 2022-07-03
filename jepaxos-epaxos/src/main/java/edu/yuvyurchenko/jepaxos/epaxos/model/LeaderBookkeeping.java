@@ -170,5 +170,16 @@ public class LeaderBookkeeping {
 
     public void setTryingToPreAccept(boolean tryingToPreAccept) {
         this.tryingToPreAccept = tryingToPreAccept;
-    }    
+    }
+
+    @Override
+    public String toString() {
+        return "LeaderBookkeeping [acceptOKs=" + acceptOKs + ", allEqual=" + allEqual + ", committedDeps="
+                + committedDeps + ", maxRecvBallot=" + maxRecvBallot + ", nacks=" + nacks + ", originalDeps="
+                + originalDeps + ", possibleQuorum=" + possibleQuorum + ", preAcceptOKs=" + preAcceptOKs
+                + ", prepareOKs=" + prepareOKs + ", preparing=" + preparing + ", recoveryInstance=" + recoveryInstance
+                + ", tryPreAcceptOKs=" + tryPreAcceptOKs + ", tryingToPreAccept=" + tryingToPreAccept + "]";
+    }
+    
+    
 }

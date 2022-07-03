@@ -302,10 +302,12 @@ public class InstanceSpace {
         meta.rwLock.readLock().lock();
         try {
             int nextCommitted = meta.commitedUpTo + 1;
-            var instance = meta.instances.get(nextCommitted).getInstance();
-            if (instance != null && (instance.getStatus() == COMMITTED 
-                                  || instance.getStatus() == EXECUTED)) {
-                meta.commitedUpTo++;
+            if (nextCommitted < meta.instances.size()) {
+                var instance = meta.instances.get(nextCommitted).getInstance();
+                if (instance != null && (instance.getStatus() == COMMITTED 
+                                     || instance.getStatus() == EXECUTED)) {
+                    meta.commitedUpTo++;
+                }
             }
         } finally {
             meta.rwLock.readLock().unlock();

@@ -14,6 +14,8 @@ import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
 
 import static edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus.*;
 
+import java.util.function.Function;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +51,15 @@ public abstract class AbstractRecoveryHandler<M extends NetworkMessage> extends 
                                                 instance.getBallot(), 
                                                 instance.getCommand(), 
                                                 instance.getAttributes()));
+    }
+
+    @Override
+    protected <T extends NetworkMessage> void broadcast(Function<String, T> msgFactory) {
+        super.broadcast(extReplicaId -> {
+            var msg = msgFactory.apply(extReplicaId);
+            LOGGER.debug("Send recovery msg={}", msg);
+            return msg;
+        });
     }
 
     protected static record PreAcceptConflicts(boolean hasCoflicts, String replicaId, int instanceId) {}

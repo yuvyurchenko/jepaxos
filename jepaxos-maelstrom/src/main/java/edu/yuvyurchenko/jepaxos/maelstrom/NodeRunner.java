@@ -84,6 +84,7 @@ public class NodeRunner {
                 .withCommandOparetion(CommandOperations.PUT.id(), CommandOperations.PUT.operation())
                 .withCommandOparetion(CommandOperations.CAS.id(), CommandOperations.CAS.operation())
                 .withCommitGracePeriodMs(1000L)
+                .withCommitGracePeriodShiftMs(200L)
                 .withWaitCommitPeriodMs(0)
                 .withMaxWaitCommitTries(0)
                 .build();

@@ -16,7 +16,8 @@ public final class ReplicaBuilder {
     private Network network;
     private ExecutingDriver executingDriver; 
     private Map<String, CommandOperation> operationRegistry = new HashMap<>();
-    private long commitGracePeriodMs = 10000L;
+    private long commitGracePeriodMs = 7000L;
+    private long commitGracePeriodShiftMs = 1000L;
     private long waitCommitPeriodMs = 500L;
     private int maxWaitCommitTries = 5;
 
@@ -90,6 +91,17 @@ public final class ReplicaBuilder {
     }
 
     /**
+     * configures the lag between different replicas to start recovery 
+     * to reduce the probability of Propose life-locks
+     * @param commitGracePeriodShiftMs
+     * @return
+     */
+    public ReplicaBuilder withCommitGracePeriodShiftMs(long commitGracePeriodShiftMs) {
+        this.commitGracePeriodShiftMs = commitGracePeriodShiftMs;
+        return this;
+    }
+
+    /**
      * configures in place commit status re-check timeout
      * @param waitCommitPeriodMs
      * @return
@@ -116,6 +128,7 @@ public final class ReplicaBuilder {
                            executingDriver, 
                            new CommandOperationRegistry(Map.copyOf(operationRegistry)),
                            commitGracePeriodMs,
+                           commitGracePeriodShiftMs,
                            waitCommitPeriodMs,
                            maxWaitCommitTries);
     }

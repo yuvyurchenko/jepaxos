@@ -52,7 +52,7 @@ public class AcceptHandler extends AbstractHandler<Accept> {
         } else {
             instanceSpace.registerNewInstance(accept.leaderId(), 
                                               accept.instanceId(), 
-                                              null, 
+                                              accept.command(), 
                                               accept.ballot(), 
                                               InstanceStatus.ACCEPTED, 
                                               accept.attributes());

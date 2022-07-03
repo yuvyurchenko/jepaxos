@@ -7,4 +7,5 @@ public record Command(String operation, Object key, Object value, Object ifValue
     public Command(String operation, Object key, Object value) {
         this(operation, key, value, null);
     }
+    public static final Command NOOP = new Command("noop", null, null, null);
 }

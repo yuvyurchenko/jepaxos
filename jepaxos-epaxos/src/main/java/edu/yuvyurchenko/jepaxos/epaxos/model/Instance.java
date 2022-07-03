@@ -20,6 +20,7 @@ public class Instance {
     private volatile Command command;
     private volatile Ballot ballot;
     private volatile InstanceStatus status;
+    private volatile long lastStatusChangeMs; 
     private volatile Attributes attributes;
     private volatile LeaderBookkeeping leaderBookkeeping;
 
@@ -37,6 +38,7 @@ public class Instance {
         this.attributes = attributes;
         this.leaderBookkeeping = null;
         this.replyData = null;
+        this.lastStatusChangeMs = System.currentTimeMillis();
     }
 
     public Instance(String replicaId,
@@ -54,6 +56,7 @@ public class Instance {
         this.attributes = attributes;
         this.leaderBookkeeping = new LeaderBookkeeping(attributes.deps());
         this.replyData = replyData;
+        this.lastStatusChangeMs = System.currentTimeMillis();
     }
 
     public Instance(String replicaId,
@@ -72,6 +75,7 @@ public class Instance {
         this.attributes = attributes;
         this.leaderBookkeeping = leaderBookkeeping;
         this.replyData = replyData;
+        this.lastStatusChangeMs = System.currentTimeMillis();
     }
 
     public String getReplicaId() {
@@ -104,6 +108,7 @@ public class Instance {
 
     public void setStatus(InstanceStatus status) {
         this.status = status;
+        this.lastStatusChangeMs = System.currentTimeMillis();
     }
 
     public Attributes getAttributes() {
@@ -124,6 +129,7 @@ public class Instance {
 
     public void switchToRecoveryLeaderBookkeeping() {
         this.leaderBookkeeping = new LeaderBookkeeping(Map.of(), true);
+        this.lastStatusChangeMs = System.currentTimeMillis();
     }
 
     public boolean isInitialBallot() {
@@ -133,5 +139,23 @@ public class Instance {
     public boolean isNotInitialBallot() {
         return !isInitialBallot();
     }
+
+    public void changeStatusWithTimestamp(InstanceStatus status) {
+        this.status = status;
+        this.lastStatusChangeMs = System.currentTimeMillis();
+    }
+
+    public long getLastStatusChangeMs() {
+        return lastStatusChangeMs;
+    }
+
+    @Override
+    public String toString() {
+        return "Instance [attributes=" + attributes + ", ballot=" + ballot + ", command=" + command + ", instanceId="
+                + instanceId + ", lastStatusChangeMs=" + lastStatusChangeMs + ", leaderBookkeeping=" + leaderBookkeeping
+                + ", replicaId=" + replicaId + ", replyData=" + replyData + ", status=" + status + "]";
+    }
+
+    
 
 }

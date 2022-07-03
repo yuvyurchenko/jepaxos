@@ -35,8 +35,10 @@ public class CommitHandler extends AbstractHandler<Commit> {
         instanceSpace.adjustCrtInstanceId(commit.replicaId(), commit.instanceId());
 
         if (instance != null) {
+            instance.setCommand(commit.command());
             instance.setAttributes(commit.attributes());
             instance.setStatus(InstanceStatus.COMMITTED);
+            
         } else {
             instanceSpace.registerNewInstance(commit.replicaId(), 
                                               commit.instanceId(), 

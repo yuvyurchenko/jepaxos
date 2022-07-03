@@ -13,6 +13,7 @@ import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.Commit;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.PrepareReply;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.InternalMessage.TryPreAccept;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Attributes;
+import edu.yuvyurchenko.jepaxos.epaxos.model.Command;
 import edu.yuvyurchenko.jepaxos.epaxos.model.InstanceStatus;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Network;
@@ -57,13 +58,14 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                  cluster.getCurrReplicaId(), 
                                                  prepareReply.replicaId(), 
                                                  prepareReply.instanceId(), 
-                                                 instance.getCommand(), 
+                                                 prepareReply.command(), 
                                                  prepareReply.attributes()));
             LOGGER.debug("Exit - broadcast Commit");
             return;
         }
         if (prepareReply.status() == InstanceStatus.ACCEPTED) {
             if (lb.recoveryInstance() == null || lb.getMaxRecvBallot() == null || lb.getMaxRecvBallot().lessThan(prepareReply.ballot())) {
+                LOGGER.debug("Init recovery because accepted");
                 lb.initRecoveryInstance(prepareReply.command(), 
                                         prepareReply.status(), 
                                         prepareReply.attributes(), 
@@ -77,17 +79,20 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                               || lb.recoveryInstance().getStatus() == InstanceStatus.PREACCEPTED 
                                               || lb.recoveryInstance().getStatus() == InstanceStatus.PREACCEPTED_EQ)) {
             if (lb.recoveryInstance() == null) {
+                LOGGER.debug("Init recovery because preaccepted");
                 lb.initRecoveryInstance(prepareReply.command(), 
                                         prepareReply.status(), 
                                         prepareReply.attributes(), 
                                         1, 
                                         false);
             } else if (Objects.equals(prepareReply.attributes(), instance.getAttributes())) {
+                LOGGER.debug("incPreAcceptCount");
                 lb.recoveryInstance().incPreAcceptCount();
             } else if (prepareReply.status() == InstanceStatus.PREACCEPTED_EQ) {
                 // If we get different ordering attributes from pre-acceptors, we must go with the ones
 			    // that agreed with the initial command leader (in case we do not use Thrifty).
 			    // This is safe if we use thrifty, although we can also safely start phase 1 in that case.
+                LOGGER.debug("Init recovery because preaccepted_eq");
                 lb.initRecoveryInstance(prepareReply.command(), 
                                         prepareReply.status(), 
                                         prepareReply.attributes(), 
@@ -127,6 +132,7 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                      instance.getBallot(), 
                                                      instance.getCommand(), 
                                                      instance.getAttributes()));
+                LOGGER.debug("Exit - broadcast Accept");
             } else if (!ri.getLeaderResponded() && ri.getPreAcceptCount() >= (cluster.getAllReplicaIds().size()/2+1)/2) {
                 lb.setPreAcceptOKs(0);
                 lb.setNacks(0);
@@ -175,13 +181,14 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                               instance.getBallot(), 
                               ri.getCommand(), 
                               instance.replyData());
+                LOGGER.debug("Exit - start phase1");
             }
         } else {
             var noopDeps = Map.of(prepareReply.replicaId(), prepareReply.instanceId() - 1);
             lb.setPreparing(false);
             instanceSpace.registerNewInstance(prepareReply.replicaId(), 
                                               prepareReply.instanceId(), 
-                                              null, 
+                                              Command.NOOP, 
                                               InstanceStatus.ACCEPTED, 
                                               new Attributes(0, noopDeps),
                                               instance);
@@ -192,9 +199,9 @@ public class PrepareReplyHandler extends AbstractRecoveryHandler<PrepareReply> {
                                                  prepareReply.replicaId(), 
                                                  prepareReply.instanceId(), 
                                                  instance.getBallot(), 
-                                                 null, 
+                                                 Command.NOOP, 
                                                  new Attributes(0, noopDeps)));
-            LOGGER.debug("Exit - broadcast Accept");
+            LOGGER.debug("Exit - broadcast NOOP Accept");
         }
     }
 

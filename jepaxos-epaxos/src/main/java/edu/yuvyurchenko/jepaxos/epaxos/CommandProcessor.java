@@ -10,12 +10,14 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import edu.yuvyurchenko.jepaxos.epaxos.InstanceSpace.Cell;
 import edu.yuvyurchenko.jepaxos.epaxos.messages.ExternalMessage;
+import edu.yuvyurchenko.jepaxos.epaxos.model.Command;
 import edu.yuvyurchenko.jepaxos.epaxos.model.Instance;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.Cluster;
 import edu.yuvyurchenko.jepaxos.epaxos.plugins.CommandOperation;
@@ -35,9 +37,10 @@ public class CommandProcessor {
     private final CommandOperationRegistry operationRegistry;
     private final ExecutingDriver driver;
 
-    private final Map<String, ProblemInstance> problemInstances;
+    private final Map<ProblemKey, ProblemInstance> problemInstances;
 
     private final long commitGracePeriodMs;
+    private final Map<String, Long> commitGracePeriodPerReplicas;
     private final long waitCommitPeriodMs;
     private final int maxWaitCommitTries;
 
@@ -48,6 +51,7 @@ public class CommandProcessor {
                      CommandOperationRegistry operationRegistry,
                      ExecutingDriver driver,
                      long commitGracePeriodMs,
+                     long commitGracePeriodShiftMs,
                      long waitCommitPeriodMs,
                      int maxWaitCommitTries) {
         this.cluster = cluster;
@@ -64,6 +68,25 @@ public class CommandProcessor {
         this.recoveryInitiator = new RecoveryInitiator(cluster, 
                                                        network, 
                                                        instanceSpace);
+
+        // we are trying to reduce the probability of the Propose life-lock 
+        // giving the priority to command leaders
+        var commitGracePeriodPerReplicas = new HashMap<String, Long>();
+        
+        var globalOrder = cluster.getAllReplicaIds().stream()
+            .sorted()
+            .collect(Collectors.toList());
+        
+        var curI = globalOrder.indexOf(cluster.getCurrReplicaId());
+        for (int i = 0; i < globalOrder.size(); i++) {
+            var k = i - curI;
+            if (k < 0) {
+                k = globalOrder.size() + k;
+            }
+            commitGracePeriodPerReplicas.put(globalOrder.get(i), commitGracePeriodMs + i * commitGracePeriodShiftMs);
+        }
+
+        this.commitGracePeriodPerReplicas = Map.copyOf(commitGracePeriodPerReplicas);
     }
 
     public boolean executeCommands() {
@@ -74,47 +97,69 @@ public class CommandProcessor {
                 var instance = iCell.getInstance();
                 if (instance != null && instance.getStatus() == EXECUTED) {
                     instanceSpace.moveExecutedUpTo(rId, instance.getInstanceId());
+                    problemInstances.remove(new ProblemKey(iCell.getReplicaId(), iCell.getInstanceId()));
                     continue;
                 }
                 if (instance == null || instance.getStatus() != COMMITTED) {
-                    handleProblemInstance(rId, iCell.getInstanceId());
-                    if (instance == null) {
-                        continue;
-                    }
+                    handleProblemInstance(rId, iCell.getInstanceId(), instance);
+                    // if (instance == null) {
+                    //     continue;
+                    // }
                     break;
                 }
                 try {
                     if (executeCommand(instance)) {
                         instanceSpace.moveExecutedUpTo(rId, instance.getInstanceId());
+                        problemInstances.remove(new ProblemKey(iCell.getReplicaId(), iCell.getInstanceId()));
                         executed = true;
                     }
                 } catch (WaitCommittedException e) {
                     // we got a dependency to not-ready instance, 
                     // our progress for this replica is blocked until recovery
-                    continue;
+                    handleProblemInstance(e.replicaId, 
+                                          e.instanceId, 
+                                          instanceSpace.getInstance(e.replicaId, 
+                                                                    e.instanceId));
+                    break;
                 }
             }
         }
         return executed;
     }
 
+    static record ProblemKey(String replicaId, int instanceId) {};
     static record ProblemInstance(int instanceId, long startGracePeriod) {}; 
 
-    private void handleProblemInstance(String replicaId, int instanceId) {
-        var problemInstance = problemInstances.get(replicaId);
+    private void handleProblemInstance(String replicaId, int instanceId, Instance instance) {
+        LOGGER.debug("Handle a problematic instance - replicaId={}, instanceId={}, instance={}", replicaId, instanceId, instance);
         if (commitGracePeriodMs > 0) {
-            if (problemInstance != null && problemInstance.instanceId == instanceId) {
-                if (System.currentTimeMillis() - problemInstance.startGracePeriod >= commitGracePeriodMs) {
-                    driver.enqueue(() -> recoveryInitiator.startRecoveryForInstance(replicaId, instanceId));
-                    problemInstances.remove(replicaId);
+            if (instance == null) {
+                var problemKey = new ProblemKey(replicaId, instanceId);
+                var problemInstance = problemInstances.get(problemKey);
+                if (problemInstance != null && problemInstance.instanceId == instanceId) {
+                    if (commitTimeout(replicaId, problemInstance.startGracePeriod)) {
+                        LOGGER.info("Need to recover empty instance slot - replicaId={}, instanceId={}", replicaId, instanceId);
+                        driver.enqueue(() -> recoveryInitiator.startRecoveryForInstance(replicaId, instanceId));
+                        problemInstances.remove(problemKey);
+                    }
+                } else {
+                    problemInstances.put(problemKey, new ProblemInstance(instanceId, System.currentTimeMillis()));
                 }
-            } else {
-                problemInstances.put(replicaId, new ProblemInstance(instanceId, System.currentTimeMillis()));
+            } else if (commitTimeout(replicaId, instance.getLastStatusChangeMs())) {
+                LOGGER.info("Need to recover stale instance slot - replicaId={}, instanceId={}", replicaId, instanceId);
+                driver.enqueue(() -> recoveryInitiator.startRecoveryForInstance(replicaId, instanceId));
             }
         } else {
             driver.enqueue(() -> recoveryInitiator.startRecoveryForInstance(replicaId, instanceId));
         }
         
+    }
+
+    private boolean commitTimeout(String replicaId, long lastTimestamp) {
+        var timePassed = System.currentTimeMillis() - lastTimestamp;
+        var totalGracePeriod = commitGracePeriodPerReplicas.get(replicaId);
+        LOGGER.trace("commitTimeout - timePassed={}, totalGracePeriod={}", timePassed, totalGracePeriod);
+        return timePassed >= totalGracePeriod;
     }
 
     private boolean executeCommand(Instance instance) throws WaitCommittedException {
@@ -166,7 +211,7 @@ public class CommandProcessor {
                 var depInstanceId = v.getAttributes().dep(rId);
                 for (var wCell : instanceSpace.notExecutedInstances(rId, depInstanceId)) {
                     waitCommand(wCell);
-                    if (wCell.getInstance().getStatus() == EXECUTED) {
+                    if (wCell.getInstance() != null && wCell.getInstance().getStatus() == EXECUTED) {
                         continue;
                     }
                     waitCommitted(wCell);
@@ -207,10 +252,16 @@ public class CommandProcessor {
                     }
                 }
                 for (var i : list) {
-                    var opId = i.getCommand().operation();
+                    var command = i.getCommand();
+                    if (command == null) {
+                        LOGGER.warn("Suspicious committed null command - replicaId={}, instanceId={}", i.getReplicaId(), i.getInstanceId());
+                        command = Command.NOOP;
+                    }
+
+                    var opId = command.operation();
                     ExternalMessage reply;
                     try {
-                        var result = operationRegistry.getOperation(opId).execute(storage, i.getCommand());
+                        var result = operationRegistry.getOperation(opId).execute(storage, command);
                         reply = okReply(i, result);
                     } catch (CommandOperation.Error err) {
                         reply = errorReply(i, err.code(), err.text());
@@ -294,29 +345,30 @@ public class CommandProcessor {
         }
 
         private Instance waitCommand(Cell c) throws WaitCommittedException {
-            int tries = 0;
-            var i = c.getInstance();
-            while (i == null || i.getCommand() == null) {
-                if (tries > maxWaitCommitTries) {
-                    LOGGER.error("Does not have a command to execute for - replicaId={}, instanceId={}", 
-                                 c.getReplicaId(), c.getInstanceId());
-                    throw new WaitCommittedException();
-                }
-                driver.sleep(waitCommitPeriodMs);
-                i = c.getInstance();
-                tries++;
-            }
-            return i;
+            // int tries = 0;
+            // var i = c.getInstance();
+            // while (i == null || i.getCommand() == null) {
+            //     if (tries > maxWaitCommitTries) {
+            //         LOGGER.error("Does not have a command to execute for - replicaId={}, instanceId={}", 
+            //                      c.getReplicaId(), c.getInstanceId());
+            //         throw new WaitCommittedException(c.getReplicaId(), c.getInstanceId());
+            //     }
+            //     driver.sleep(waitCommitPeriodMs);
+            //     i = c.getInstance();
+            //     tries++;
+            // }
+            // return i;
+            return c.getInstance();
         }
 
         private Instance waitCommitted(Cell c) throws WaitCommittedException {
             int tries = 0;
             var i = c.getInstance();
-            while (i.getStatus() != COMMITTED) {
+            while (i == null || i.getStatus() != COMMITTED) {
                 if (tries > maxWaitCommitTries) {
-                    LOGGER.error("Not committed command - replicaId={}, instanceId={}", 
+                    LOGGER.debug("Not committed command - replicaId={}, instanceId={}", 
                                  c.getReplicaId(), c.getInstanceId());
-                    throw new WaitCommittedException();
+                    throw new WaitCommittedException(c.getReplicaId(), c.getInstanceId());
                 }
                 driver.sleep(waitCommitPeriodMs);
                 i = c.getInstance();
@@ -327,6 +379,12 @@ public class CommandProcessor {
     }
 
     private static class WaitCommittedException extends Exception {
+        final String replicaId;
+        final int instanceId;
+        WaitCommittedException(String replicaId, int instanceId) {
+            this.replicaId = replicaId;
+            this.instanceId = instanceId;
+        }
 
     }
 }

@@ -257,23 +257,11 @@ public class Message {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-
-        // var c = (ObjectNode) getBody().get("command");
-        // var op = CommandOperation.valueOf(c.get("operation").asText());
-        // var key = c.get("key").asText();
-        // var val = Optional.ofNullable(c.get("value")).map(JsonNode::asText).orElse(null);
-        // var ifVal = Optional.ofNullable(c.get("ifValue")).map(JsonNode::asText).orElse(null);
-        // return new Command(op, key, val, ifVal);
     }
 
     public void setCommand(Command command) {
         var c = objectMapper.valueToTree(command);
         getBody().set("command", c);
-        // var c = getBody().putObject("command");
-        // c.put("operation", command.operation().name());
-        // c.put("key", (String) command.key());
-        // c.put("value", (String) command.value());
-        // c.put("ifValue", (String) command.ifValue());
     }
 
     public Attributes getAttributes() {
